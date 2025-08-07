@@ -52,10 +52,10 @@ test = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/amvera-ru/langchain-amvera"
-Repository = "https://github.com/amvera-ru/langchain-amvera.git"
-Documentation = "https://docs.amvera.ru/langchain"
-"Bug Reports" = "https://github.com/amvera-ru/langchain-amvera/issues"
+Homepage = "https://github.com/Yakvenalex/langchain-amvera"
+Repository = "https://github.com/Yakvenalex/langchain-amvera"
+Documentation = "https://github.com/Yakvenalex/langchain-amvera"
+"Bug Reports" = "https://github.com/Yakvenalex/langchain-amvera/issues"
 
 [tool.setuptools.packages.find]
 include = ["langchain_amvera*"]
