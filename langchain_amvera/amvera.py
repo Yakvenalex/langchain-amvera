@@ -5,27 +5,26 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any, Dict, List, Optional, Sequence
-from pydantic import Field, SecretStr, model_validator, ConfigDict
 
 import httpx
+from dotenv import load_dotenv
 from langchain_core.callbacks import (
     AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
 )
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
-    BaseMessage,
     AIMessage,
+    BaseMessage,
+    ChatMessage,
     HumanMessage,
     SystemMessage,
-    ChatMessage,
     ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, ChatResult
-from langchain_core.utils import convert_to_secret_str, get_from_dict_or_env
 from langchain_core.tools import BaseTool
-
-from dotenv import load_dotenv
+from langchain_core.utils import convert_to_secret_str, get_from_dict_or_env
+from pydantic import ConfigDict, Field, SecretStr, model_validator
 
 load_dotenv()
 
@@ -34,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 class AmveraLLM(BaseChatModel):
     """
-    Amvera LLM для работы с моделями llama8b и llama70b.
+    Amvera LLM для работы с моделями llama8b, llama70b, gpt-4.1 и gpt-5.
 
     Example:
         .. code-block:: python
@@ -42,7 +41,7 @@ class AmveraLLM(BaseChatModel):
             from langchain_amvera import AmveraLLM
 
             llm = AmveraLLM(
-                model="llama70b",
+                model="llama70b",  # или "gpt-4.1", "gpt-5"
                 temperature=0.7,
                 max_tokens=1000,
                 api_token="your-token"  # или через переменную AMVERA_API_TOKEN
@@ -67,7 +66,7 @@ class AmveraLLM(BaseChatModel):
     """API токен для Amvera."""
 
     model: str = Field(default="llama70b")
-    """ID модели для использования. Доступно: llama8b, llama70b"""
+    """ID модели для использования. Доступно: llama8b, llama70b, gpt-4.1, gpt-5"""
 
     base_url: str = Field(default="https://kong-proxy.yc.amvera.ru/api/v1")
     """Базовый URL для Amvera API"""
@@ -198,7 +197,6 @@ class AmveraLLM(BaseChatModel):
             # Особая обработка для ToolMessage
             if isinstance(message, ToolMessage):
                 # Форматируем результат инструмента для лучшего понимания
-                tool_name = getattr(message, 'tool_call_id', 'unknown_tool')
                 content = f"Результат выполнения инструмента: {content}"
 
             amvera_message: Dict[str, Any] = {
@@ -239,9 +237,15 @@ class AmveraLLM(BaseChatModel):
 
         # Параметры генерации
         if self.temperature is not None:
-            payload["temperature"] = self.temperature
+            # GPT модели поддерживают только temperature = 1 (по умолчанию)
+            if not self.model.startswith("gpt"):
+                payload["temperature"] = self.temperature
         if self.max_tokens is not None:
-            payload["max_tokens"] = self.max_tokens
+            # GPT модели используют max_completion_tokens вместо max_tokens
+            if self.model.startswith("gpt"):
+                payload["max_completion_tokens"] = self.max_tokens
+            else:
+                payload["max_tokens"] = self.max_tokens
         if stop:
             payload["stop"] = stop
 
@@ -265,7 +269,7 @@ class AmveraLLM(BaseChatModel):
         generation_info = {}
         tool_calls = None
 
-        # Основной формат ответа Amvera
+        # Основной формат ответа Amvera (используется и для llama и для gpt)
         if "result" in response_data and "alternatives" in response_data["result"]:
             alternatives = response_data["result"]["alternatives"]
 
@@ -275,7 +279,7 @@ class AmveraLLM(BaseChatModel):
                     if alt.get("status") == "ALTERNATIVE_STATUS_FINAL":
                         message = alt.get("message", {})
                         content = message.get("text", "")
-                        
+
                         # Извлекаем tool calls если есть
                         if "toolCallList" in message and "toolCalls" in message["toolCallList"]:
                             tool_calls = []
@@ -293,7 +297,7 @@ class AmveraLLM(BaseChatModel):
                 if not content and alternatives:
                     message = alternatives[0].get("message", {})
                     content = message.get("text", "")
-                    
+
                     # Извлекаем tool calls если есть
                     if "toolCallList" in message and "toolCalls" in message["toolCallList"]:
                         tool_calls = []
@@ -314,12 +318,12 @@ class AmveraLLM(BaseChatModel):
                     "modelVersion"
                 ]
 
-        # Fallback форматы
+        # Fallback для OpenAI-совместимого формата (если вдруг будет использоваться)
         elif "choices" in response_data and response_data["choices"]:
             choice = response_data["choices"][0]
             message = choice.get("message", {})
             content = message.get("content", "")
-            
+
             # Проверяем tool_calls в OpenAI формате
             if "tool_calls" in message:
                 tool_calls = []
@@ -330,14 +334,15 @@ class AmveraLLM(BaseChatModel):
                         if isinstance(args, str):
                             try:
                                 args = json.loads(args)
-                            except:
+                            except json.JSONDecodeError:
                                 args = {}
                         tool_calls.append({
                             "name": func_call.get("name", ""),
                             "args": args,
                             "id": tool_call.get("id", f"call_{len(tool_calls)}")
                         })
-                        
+
+        # Простой формат ответа  
         elif "response" in response_data:
             content = response_data["response"]
         else:
@@ -360,24 +365,27 @@ class AmveraLLM(BaseChatModel):
                 f"Отправка запроса к Amvera API: {json.dumps(payload, ensure_ascii=False, indent=2)}"
             )
 
+        # Определяем endpoint в зависимости от модели
+        endpoint = "/models/gpt" if self.model.startswith("gpt") else "/models/llama"
+
         try:
-            response = self._sync_client.post("/models/llama", json=payload)
+            response = self._sync_client.post(endpoint, json=payload)
             response.raise_for_status()
             response_data = response.json()
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
-                raise ValueError("Неверный API токен Amvera")
+                raise ValueError("Неверный API токен Amvera") from e
             elif e.response.status_code == 429:
-                raise ValueError("Превышен лимит запросов к Amvera API")
+                raise ValueError("Превышен лимит запросов к Amvera API") from e
             else:
-                raise ValueError(f"HTTP ошибка {e.response.status_code}: {e}")
-        except httpx.TimeoutException:
-            raise ValueError("Таймаут запроса к Amvera API")
+                raise ValueError(f"HTTP ошибка {e.response.status_code}: {e}") from e
+        except httpx.TimeoutException as e:
+            raise ValueError("Таймаут запроса к Amvera API") from e
         except httpx.RequestError as e:
-            raise ValueError(f"Ошибка соединения с Amvera API: {e}")
+            raise ValueError(f"Ошибка соединения с Amvera API: {e}") from e
         except json.JSONDecodeError as e:
-            raise ValueError(f"Ошибка парсинга JSON ответа: {e}")
+            raise ValueError(f"Ошибка парсинга JSON ответа: {e}") from e
 
         if self.verbose:
             logger.info(
@@ -416,24 +424,27 @@ class AmveraLLM(BaseChatModel):
 
         client = self._get_async_client()
 
+        # Определяем endpoint в зависимости от модели
+        endpoint = "/models/gpt" if self.model.startswith("gpt") else "/models/llama"
+
         try:
-            response = await client.post("/models/llama", json=payload)
+            response = await client.post(endpoint, json=payload)
             response.raise_for_status()
             response_data = response.json()
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
-                raise ValueError("Неверный API токен Amvera")
+                raise ValueError("Неверный API токен Amvera") from e
             elif e.response.status_code == 429:
-                raise ValueError("Превышен лимит запросов к Amvera API")
+                raise ValueError("Превышен лимит запросов к Amvera API") from e
             else:
-                raise ValueError(f"HTTP ошибка {e.response.status_code}: {e}")
-        except httpx.TimeoutException:
-            raise ValueError("Таймаут запроса к Amvera API")
+                raise ValueError(f"HTTP ошибка {e.response.status_code}: {e}") from e
+        except httpx.TimeoutException as e:
+            raise ValueError("Таймаут запроса к Amvera API") from e
         except httpx.RequestError as e:
-            raise ValueError(f"Ошибка соединения с Amvera API: {e}")
+            raise ValueError(f"Ошибка соединения с Amvera API: {e}") from e
         except json.JSONDecodeError as e:
-            raise ValueError(f"Ошибка парсинга JSON ответа: {e}")
+            raise ValueError(f"Ошибка парсинга JSON ответа: {e}") from e
 
         if self.verbose:
             logger.info(
@@ -498,7 +509,7 @@ class AmveraLLM(BaseChatModel):
                     "description": tool.description,
                 }
             }
-            
+
             # Добавляем параметры если они есть
             if hasattr(tool, 'args_schema') and tool.args_schema:
                 try:
@@ -512,14 +523,14 @@ class AmveraLLM(BaseChatModel):
                         "properties": {},
                         "required": []
                     }
-            
+
             amvera_tools.append(tool_def)
-        
+
         # Создаем копию с новыми инструментами
         new_kwargs = self.dict()
         new_kwargs.update(kwargs)
         new_kwargs["bound_tools"] = amvera_tools
-        
+
         return self.__class__(**new_kwargs)
 
     def __del__(self):
@@ -548,7 +559,7 @@ def create_amvera_chat_model(
     Фабричная функция для создания Amvera chat model.
 
     Args:
-        model: Модель для использования (llama8b или llama70b)
+        model: Модель для использования (llama8b, llama70b, gpt-4.1, gpt-5)
         temperature: Параметр творчества (0.0-2.0)
         max_tokens: Максимальное количество токенов
         api_token: API токен
@@ -575,6 +586,7 @@ ChatAmvera = AmveraLLM
 # Пример использования
 if __name__ == "__main__":
     import asyncio
+
     from langchain_core.messages import HumanMessage, SystemMessage
 
     async def main():
@@ -613,3 +625,4 @@ if __name__ == "__main__":
             traceback.print_exc()
 
     asyncio.run(main())
+

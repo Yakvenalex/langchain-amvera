@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage
 
 # Инициализация модели
 llm = AmveraLLM(
-    model="llama70b",
+    model="llama70b",  # или "gpt-4.1", "gpt-5"
     temperature=0.7,
     api_token="your-token"  # или через переменную AMVERA_API_TOKEN
 )
@@ -38,8 +38,13 @@ asyncio.run(main())
 
 ## Поддерживаемые модели
 
+### LLaMA модели
 - `llama8b` - Llama 3.1 8B модель
 - `llama70b` - Llama 3.1 70B модель (по умолчанию)
+
+### GPT модели
+- `gpt-4.1` - модель GPT-4.1 от OpenAI
+- `gpt-5` - модель GPT-5 от OpenAI
 
 ## Конфигурация
 
@@ -55,7 +60,7 @@ AMVERA_API_TOKEN=your-amvera-api-token
 
 ```python
 llm = AmveraLLM(
-    model="llama70b",           # Модель для использования
+    model="llama70b",           # Модель: llama8b, llama70b, gpt-4.1, gpt-5
     temperature=0.7,            # Параметр творчества (0.0-2.0)
     max_tokens=1000,            # Максимальное количество токенов
     timeout=60,                 # Таймаут запроса в секундах
@@ -88,8 +93,8 @@ def get_weather(location: str, unit: str = "celsius") -> str:
     # Ваша логика здесь
     return f"Погода в {location}: солнечно, {unit}"
 
-# Привязываем инструменты к модели
-llm = AmveraLLM(model="llama70b")
+# Привязываем инструменты к модели  
+llm = AmveraLLM(model="llama70b")  # или "gpt-4.1", "gpt-5"
 llm_with_tools = llm.bind_tools([get_weather])
 
 # Использование

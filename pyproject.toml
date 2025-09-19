@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "langchain-amvera"
-version = "0.1.0"
-description = "LangChain интеграция для Amvera LLM API"
+version = "0.3.1"
+description = "LangChain интеграция для Amvera LLM API с поддержкой LLaMA и GPT моделей"
 authors = [
     {name = "Alexey Yakovenko", email = "mr.mnogo@gmail.com"}
 ]

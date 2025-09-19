@@ -10,11 +10,11 @@ from langchain_amvera import AmveraLLM, create_amvera_chat_model
 
 
 # Тестовые инструменты
-class TestToolArgs(BaseModel):
+class ToolArgs(BaseModel):
     query: str = Field(description="Test query")
 
 
-@tool("test_tool", args_schema=TestToolArgs)
+@tool("test_tool", args_schema=ToolArgs)
 def test_tool(query: str) -> str:
     """Test tool for unit tests."""
     return f"Result for: {query}"
@@ -67,6 +67,15 @@ class TestAmveraLLM:
         assert llm.timeout == 30
         assert llm.verbose is True
 
+    @patch.dict("os.environ", {"AMVERA_API_TOKEN": "test-token"})
+    def test_gpt_model_initialization(self):
+        """Test AmveraLLM initialization with GPT models."""
+        llm_gpt4 = AmveraLLM(model="gpt-4.1")
+        llm_gpt5 = AmveraLLM(model="gpt-5")
+        
+        assert llm_gpt4.model == "gpt-4.1"
+        assert llm_gpt5.model == "gpt-5"
+
     def test_initialization_without_token(self):
         """Test that initialization fails without API token."""
         with pytest.raises(ValueError, match="API токен Amvera не найден"):
@@ -112,13 +121,14 @@ class TestAmveraLLM:
         """Test response parsing."""
         llm = AmveraLLM()
         
-        content, info = llm._parse_response(mock_response_data)
+        content, info, tool_calls = llm._parse_response(mock_response_data)
         
         assert content == "Test response"
         assert "usage" in info
         assert "model_version" in info
         assert info["usage"]["totalTokens"] == 15
         assert info["model_version"] == "llama70b-v1.0"
+        assert tool_calls is None
 
     @patch.dict("os.environ", {"AMVERA_API_TOKEN": "test-token"})
     @patch("httpx.Client.post")
@@ -199,7 +209,7 @@ class TestAmveraLLM:
     def test_tools_payload(self):
         """Test tools in payload creation."""
         tools = [{"type": "function", "function": {"name": "test_func"}}]
-        llm = AmveraLLM(tools=tools)
+        llm = AmveraLLM(bound_tools=tools)
         messages = [HumanMessage(content="Test")]
         
         payload = llm._create_payload(messages)
@@ -314,3 +324,109 @@ class TestAmveraLLMBindTools:
         
         # Новая модель должна иметь инструменты
         assert llm_with_tools.bound_tools is not None
+
+
+class TestAmveraLLMGPTModels:
+    """Test cases specifically for GPT models."""
+
+    @pytest.fixture
+    def mock_gpt_response_data(self):
+        """Mock GPT response data from Amvera API."""
+        return {
+            "result": {
+                "alternatives": [
+                    {
+                        "status": "ALTERNATIVE_STATUS_FINAL", 
+                        "message": {"text": "GPT model response"}
+                    }
+                ],
+                "usage": {
+                    "inputTextTokens": 12,
+                    "completionTokens": 8,
+                    "totalTokens": 20
+                },
+                "modelVersion": "gpt-5-v1.0"
+            }
+        }
+
+    @patch.dict("os.environ", {"AMVERA_API_TOKEN": "test-token"})
+    def test_gpt_parse_response(self, mock_gpt_response_data):
+        """Test GPT response parsing uses same format as Llama."""
+        llm = AmveraLLM(model="gpt-5")
+        
+        content, info, tool_calls = llm._parse_response(mock_gpt_response_data)
+        
+        assert content == "GPT model response"
+        assert "usage" in info
+        assert "model_version" in info
+        assert info["usage"]["totalTokens"] == 20
+        assert info["model_version"] == "gpt-5-v1.0"
+        assert tool_calls is None
+
+    @patch.dict("os.environ", {"AMVERA_API_TOKEN": "test-token"})
+    @patch("httpx.Client.post")
+    def test_gpt_endpoint_selection(self, mock_post):
+        """Test that GPT models use correct endpoint."""
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "result": {
+                "alternatives": [{"status": "ALTERNATIVE_STATUS_FINAL", "message": {"text": "test"}}]
+            }
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+        
+        # Test GPT model
+        llm_gpt = AmveraLLM(model="gpt-5")
+        messages = [HumanMessage(content="Test")]
+        
+        llm_gpt._generate(messages)
+        
+        # Verify it called the /models/gpt endpoint
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        assert call_args[0][0] == "/models/gpt"
+
+    @patch.dict("os.environ", {"AMVERA_API_TOKEN": "test-token"})
+    @patch("httpx.Client.post")
+    def test_llama_endpoint_selection(self, mock_post):
+        """Test that Llama models use correct endpoint."""
+        mock_response = Mock()
+        mock_response.json.return_value = {
+            "result": {
+                "alternatives": [{"status": "ALTERNATIVE_STATUS_FINAL", "message": {"text": "test"}}]
+            }
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_post.return_value = mock_response
+        
+        # Test Llama model
+        llm_llama = AmveraLLM(model="llama70b")
+        messages = [HumanMessage(content="Test")]
+        
+        llm_llama._generate(messages)
+        
+        # Verify it called the /models/llama endpoint
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        assert call_args[0][0] == "/models/llama"
+
+    @patch.dict("os.environ", {"AMVERA_API_TOKEN": "test-token"})
+    def test_gpt_payload_creation(self):
+        """Test payload creation for GPT models."""
+        llm = AmveraLLM(model="gpt-4.1", temperature=0.8, max_tokens=150)
+        messages = [
+            SystemMessage(content="You are helpful"),
+            HumanMessage(content="Hello")
+        ]
+        
+        payload = llm._create_payload(messages)
+        
+        assert payload["model"] == "gpt-4.1"
+        assert payload["temperature"] == 0.8
+        assert payload["max_tokens"] == 150
+        assert len(payload["messages"]) == 2
+        assert payload["messages"][0]["role"] == "system"
+        assert payload["messages"][0]["text"] == "You are helpful"
+        assert payload["messages"][1]["role"] == "user"
+        assert payload["messages"][1]["text"] == "Hello"

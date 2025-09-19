@@ -6,10 +6,10 @@ from langchain_amvera.amvera import AmveraLLM, create_amvera_chat_model
 AmveraChatModel = AmveraLLM
 ChatAmvera = AmveraLLM
 
-__version__ = "0.2.0"
+__version__ = "0.3.1"
 __all__ = [
     "AmveraLLM",
-    "AmveraChatModel", 
+    "AmveraChatModel",
     "ChatAmvera",
     "create_amvera_chat_model",
 ]
